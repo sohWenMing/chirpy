@@ -1,41 +1,68 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
+	"sync/atomic"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	//mux is the router that is passed into the server
+	cfg := config{}
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", baseHandler)
 	mux.HandleFunc("/healthz", healthCheckHandler)
-	// user HandleFunc if we want to have a simple handling function  that interacts with the endpoint, without any requirements to access state
+	mux.HandleFunc("/metrics", cfg.metricsHandler)
+	mux.HandleFunc("/reset", cfg.resetHandler().ServeHTTP)
 
 	fileServer := http.FileServer(http.Dir("."))
-	/*
-		fileServer is used to serve files to the user - in the event that the path of the request evaluates to "/", will serve index.html
-		be default
-	*/
-
-	mux.Handle("/app/", http.StripPrefix("/app", fsWrapper(fileServer)))
-	//use .Handle if you want to attach an actual handler, ie a struct that has a http.ServeHTTP method which defines it as a http.Handler interface
+	wrappedFileServer := fsWrapper(fileServer)
+	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(wrappedFileServer)))
 
 	server := &http.Server{
 		Handler: mux,
 		Addr:    ":8080",
 	}
-	/*
-		note that app fields of the server should be set at instantiation and we should be interacting with a pointer to a server, and not
-		a copy or value of a server
-	*/
-
 	server.ListenAndServe()
 }
 
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(200)
-	w.Header().Set("content-type", "text/plain; charset=utf-8")
+type config struct {
+	fileServerHits atomic.Int32
+}
+
+func (cfg *config) resetHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileServerHits.Store(0)
+		hits := cfg.fileServerHits.Load()
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("content-type", "text/plain; charset=UTF-8")
+		w.Write([]byte(fmt.Sprintf("Hits has been reset to: %d", hits)))
+	})
+}
+
+func (cfg *config) metricsHandler(w http.ResponseWriter, _ *http.Request) {
+	hits := cfg.fileServerHits.Load()
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("content-type", "text/plain; charset=UTF-8")
+	w.Write([]byte(fmt.Sprintf("Hits: %d", hits)))
+}
+
+func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileServerHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
+
+}
+func baseHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte("Placeholder for 404 not found"))
+}
+
+func healthCheckHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("content-type", "text/plain; charset=UTF-8")
 	w.Write([]byte("OK"))
 }
 
@@ -44,15 +71,10 @@ func fsWrapper(fs http.Handler) http.Handler {
 		if r.URL.Path == "/" {
 			_, err := os.Stat("./index.html")
 			if os.IsNotExist(err) {
-				http.Error(w, "index not found", 404)
+				http.Error(w, "No index page found", 404)
 				return
 			}
 		}
 		fs.ServeHTTP(w, r)
 	})
 }
-
-/*
-	fsWrapper returns a http Handler, as http.HandlerFunc returns a http Handler where there is an initial callback that will run
-	defined by the func(w http.ResponseWriter, r *http.Request)
-*/
