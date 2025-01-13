@@ -11,10 +11,15 @@ func main() {
 	cfg := config{}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", baseHandler)
-	mux.HandleFunc("/healthz", healthCheckHandler)
-	mux.HandleFunc("/metrics", cfg.metricsHandler)
-	mux.HandleFunc("/reset", cfg.resetHandler().ServeHTTP)
+
+	mux.HandleFunc("GET /healthz", healthCheckHandler)
+	mux.HandleFunc("GET /metrics", cfg.metricsHandler)
+	mux.HandleFunc("POST /reset", func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileServerHits.Store(0)
+		w.Header().Set("content-type", "text/plain; charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+	})
+	// mux.HandleFunc("/", baseHandler)
 
 	fileServer := http.FileServer(http.Dir("."))
 	wrappedFileServer := fsWrapper(fileServer)
@@ -31,16 +36,6 @@ type config struct {
 	fileServerHits atomic.Int32
 }
 
-func (cfg *config) resetHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileServerHits.Store(0)
-		hits := cfg.fileServerHits.Load()
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("content-type", "text/plain; charset=UTF-8")
-		w.Write([]byte(fmt.Sprintf("Hits has been reset to: %d", hits)))
-	})
-}
-
 func (cfg *config) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	hits := cfg.fileServerHits.Load()
 	w.WriteHeader(http.StatusOK)
@@ -50,12 +45,14 @@ func (cfg *config) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 
 func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
 		cfg.fileServerHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
 
 }
-func baseHandler(w http.ResponseWriter, _ *http.Request) {
+func baseHandler(w http.ResponseWriter, r *http.Request) {
+
 	w.WriteHeader(http.StatusNotFound)
 	w.Write([]byte("Placeholder for 404 not found"))
 }
