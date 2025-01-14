@@ -6,8 +6,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 )
+
+var profaneStringMap = map[string]bool{
+	"kerfuffle": true,
+	"sharbert":  true,
+	"fornax":    true,
+}
 
 func main() {
 	cfg := config{}
@@ -49,7 +56,7 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	// fmt.Printf("request body: %s\n", string(body))
 
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
+	// decoder.DisallowUnknownFields()
 	params := pararameters{}
 
 	jsonDecodeErr := decoder.Decode(&params)
@@ -64,15 +71,42 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		writeErrToResponse(w, "Chirp is too long")
 		return
 	}
-	writeValidToReponse(w)
+
+	splitTrimmedStrings := getStrippedSplitStrings(params.Body)
+	validatedStrings := []string{}
+	for _, splitTrimmedString := range splitTrimmedStrings {
+		if _, ok := profaneStringMap[strings.ToLower(splitTrimmedString)]; ok {
+			validatedStrings = append(validatedStrings, "****")
+			continue
+		}
+		validatedStrings = append(validatedStrings, splitTrimmedString)
+	}
+
+	writeValidToReponse(w, strings.Join(validatedStrings, " "))
 
 }
 
-func writeValidToReponse(w http.ResponseWriter) {
-	validStruct := validStruct{
-		ValidString: true,
+func getStrippedSplitStrings(input string) (outSlice []string) {
+	fmt.Printf("string from input: %s\n", input)
+	returnedSlice := []string{}
+	splitStrings := strings.Split(input, " ")
+	for _, splitString := range splitStrings {
+		returnedSlice = append(returnedSlice, strings.Trim(splitString, " "))
 	}
-	marshalledData, err := json.Marshal(validStruct)
+	for _, returnString := range returnedSlice {
+		fmt.Printf("return string value: %s\n", returnString)
+	}
+	return returnedSlice
+}
+
+func writeValidToReponse(w http.ResponseWriter, responseString string) {
+	type cleanedParams struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
+
+	resBodyStruct := cleanedParams{responseString}
+
+	marshalledData, err := json.Marshal(resBodyStruct)
 	if err != nil {
 		log.Printf("error marshalling JSON: %s", err)
 		w.WriteHeader(400)
