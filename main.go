@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -12,13 +14,14 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", healthCheckHandler)
-	mux.HandleFunc("GET /metrics", cfg.metricsHandler)
-	mux.HandleFunc("POST /reset", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/healthz", healthCheckHandler)
+	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
+	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileServerHits.Store(0)
 		w.Header().Set("content-type", "text/plain; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	// mux.HandleFunc("/", baseHandler)
 
 	fileServer := http.FileServer(http.Dir("."))
@@ -36,11 +39,55 @@ type config struct {
 	fileServerHits atomic.Int32
 }
 
+func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
+
+	type pararameters struct {
+		Body string `json:"body"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := pararameters{}
+
+	jsonDecodeErr := decoder.Decode(&params)
+
+	if jsonDecodeErr != nil {
+		writeJsonDecodeErrToResponse(w)
+		return
+	}
+}
+
+func writeJsonDecodeErrToResponse(w http.ResponseWriter) {
+
+	errorStruct := errorJsonStruct{
+		ErrorString: "Something went wrong during the decoding of the request body",
+	}
+	marshalledData, err := json.Marshal(errorStruct)
+
+	if err != nil {
+		log.Printf("error marshalling JSON: %s", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusBadRequest)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(marshalledData))
+
+}
+
 func (cfg *config) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	hits := cfg.fileServerHits.Load()
 	w.WriteHeader(http.StatusOK)
-	w.Header().Set("content-type", "text/plain; charset=UTF-8")
-	w.Write([]byte(fmt.Sprintf("Hits: %d", hits)))
+	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+	template := `
+	<html>
+  		<body>
+    		<h1>Welcome, Chirpy Admin</h1>
+    		<p>Chirpy has been visited %d times!</p>
+  		</body>
+	</html>
+	`
+	w.Write([]byte(fmt.Sprintf(template, hits)))
 }
 
 func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -51,15 +98,16 @@ func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
 	})
 
 }
-func baseHandler(w http.ResponseWriter, r *http.Request) {
 
-	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte("Placeholder for 404 not found"))
-}
+// func baseHandler(w http.ResponseWriter, r *http.Request) {
+
+// 	w.WriteHeader(http.StatusNotFound)
+// 	w.Write([]byte("Placeholder for 404 not found"))
+// }
 
 func healthCheckHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Header().Set("content-type", "text/plain; charset=UTF-8")
+	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
 	w.Write([]byte("OK"))
 }
 
@@ -74,4 +122,8 @@ func fsWrapper(fs http.Handler) http.Handler {
 		}
 		fs.ServeHTTP(w, r)
 	})
+}
+
+type errorJsonStruct struct {
+	ErrorString string `json:"error"`
 }
