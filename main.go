@@ -45,31 +45,59 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 	}
 
+	// body, _ := io.ReadAll(r.Body)
+	// fmt.Printf("request body: %s\n", string(body))
+
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 	params := pararameters{}
 
 	jsonDecodeErr := decoder.Decode(&params)
 
 	if jsonDecodeErr != nil {
-		writeJsonDecodeErrToResponse(w)
+		writeErrToResponse(w, "Something went wrong during the decoding of the request body")
 		return
 	}
+	fmt.Printf("value of body in params: %s\n", params.Body)
+
+	if len(params.Body) > 140 {
+		writeErrToResponse(w, "Chirp is too long")
+		return
+	}
+	writeValidToReponse(w)
+
 }
 
-func writeJsonDecodeErrToResponse(w http.ResponseWriter) {
+func writeValidToReponse(w http.ResponseWriter) {
+	validStruct := validStruct{
+		ValidString: true,
+	}
+	marshalledData, err := json.Marshal(validStruct)
+	if err != nil {
+		log.Printf("error marshalling JSON: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(marshalledData))
+}
+
+func writeErrToResponse(w http.ResponseWriter, errorString string) {
 
 	errorStruct := errorJsonStruct{
-		ErrorString: "Something went wrong during the decoding of the request body",
+		ErrorString: errorString,
 	}
 	marshalledData, err := json.Marshal(errorStruct)
 
 	if err != nil {
 		log.Printf("error marshalling JSON: %s", err)
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(400)
 		return
 	}
 
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(400)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(marshalledData))
 
@@ -122,6 +150,10 @@ func fsWrapper(fs http.Handler) http.Handler {
 		}
 		fs.ServeHTTP(w, r)
 	})
+}
+
+type validStruct struct {
+	ValidString bool `json:"valid"`
 }
 
 type errorJsonStruct struct {
