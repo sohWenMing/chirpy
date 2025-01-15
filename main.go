@@ -1,13 +1,18 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
+
+	_ "github.com/lib/pq"
+	"github.com/sohWenMing/chirpy/internal/database"
 )
 
 var profaneStringMap = map[string]bool{
@@ -18,7 +23,8 @@ var profaneStringMap = map[string]bool{
 
 func main() {
 	cfg := config{}
-
+	db := loadPostgresDB()
+	cfg.registerQueries(database.New(db))
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/healthz", healthCheckHandler)
@@ -42,8 +48,21 @@ func main() {
 	server.ListenAndServe()
 }
 
+func loadPostgresDB() *sql.DB {
+	dbURL, dbURLErr := getDbUrl()
+	if dbURLErr != nil {
+		log.Fatalf("Error returned: %v", dbURLErr)
+	}
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Error returned: %v", err)
+	}
+	return db
+}
+
 type config struct {
 	fileServerHits atomic.Int32
+	queries        *database.Queries
 }
 
 func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +180,10 @@ func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
 
 }
 
+func (cfg *config) registerQueries(queries *database.Queries) {
+	cfg.queries = queries
+}
+
 // func baseHandler(w http.ResponseWriter, r *http.Request) {
 
 // 	w.WriteHeader(http.StatusNotFound)
@@ -186,10 +209,18 @@ func fsWrapper(fs http.Handler) http.Handler {
 	})
 }
 
-type validStruct struct {
-	ValidString bool `json:"valid"`
-}
+// type validStruct struct {
+// 	ValidString bool `json:"valid"`
+// }
 
 type errorJsonStruct struct {
 	ErrorString string `json:"error"`
+}
+
+func getDbUrl() (url string, err error) {
+	db_url := os.Getenv("DB_URL")
+	if len(db_url) == 0 {
+		return "", errors.New("DB URL does not exist")
+	}
+	return db_url, nil
 }
