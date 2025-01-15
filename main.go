@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/sohWenMing/chirpy/internal/database"
@@ -23,20 +26,28 @@ var profaneStringMap = map[string]bool{
 }
 
 func main() {
+	loadEnvErr := loadEnv()
+	if loadEnvErr != nil {
+		log.Fatal("error when loading environment, program exited")
+	}
+
+	platform := os.Getenv("PLATFORM")
+	if platform == "" {
+		log.Fatal("PLATFORM env var was not successfully loaded")
+	}
 	cfg := config{}
+	cfg.platform = platform
 	db := loadPostgresDB()
 	cfg.registerQueries(database.New(db))
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/healthz", healthCheckHandler)
 	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
-	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileServerHits.Store(0)
-		w.Header().Set("content-type", "text/plain; charset=UTF-8")
-		w.WriteHeader(http.StatusOK)
-	})
+
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
-	mux.HandleFunc("POST /api/users", createUsersHandler)
+	mux.HandleFunc("POST /api/users", cfg.createUsersHandler)
+	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
+
 	// mux.HandleFunc("/", baseHandler)
 
 	fileServer := http.FileServer(http.Dir("."))
@@ -65,6 +76,7 @@ func loadPostgresDB() *sql.DB {
 type config struct {
 	fileServerHits atomic.Int32
 	queries        *database.Queries
+	platform       string
 }
 
 // handlers start
@@ -127,7 +139,7 @@ func writeErrToResponse(w http.ResponseWriter, errorString string) {
 
 }
 
-func createUsersHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *config) createUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 	type emailJsonStruct struct {
 		Email string `json:"email"`
@@ -146,9 +158,79 @@ func createUsersHandler(w http.ResponseWriter, r *http.Request) {
 		writeErrToResponse(w, "bad request: email cannot be nil")
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "text/plain; encoding=utf8")
-	w.Write([]byte("OK"))
+
+	user, createUserErr := createUser(emailJson.Email, cfg)
+	if createUserErr != nil {
+		writeErrToResponse(w, fmt.Sprintf("database error: %s", createUserErr.Error()))
+		return
+	}
+
+	type createdUserStruct struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+
+	structToMarshal := createdUserStruct{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	body, err := json.Marshal(structToMarshal)
+	if err != nil {
+		writeErrToResponse(w, "An error occured when marshalling the response")
+		return
+	}
+
+	w.WriteHeader(201)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+
+}
+
+func (cfg *config) resetUsersHandler(w http.ResponseWriter, _ *http.Request) {
+
+	platform := cfg.platform
+	if platform != "dev" {
+		w.WriteHeader(403)
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("403 Forbidden"))
+		return
+	}
+
+	resetErr := cfg.queries.DeleteUsers(context.Background())
+	if resetErr != nil {
+		writeErrToResponse(w, "Error when trying to reset users")
+	}
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("Users have been successfully reset"))
+
+}
+
+func createUser(email string, cfg *config) (user database.User, err error) {
+	params := database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Email:     email,
+	}
+
+	user, createUserErr := cfg.queries.CreateUser(context.Background(), params)
+	if createUserErr != nil {
+		return database.User{}, createUserErr
+	}
+	return user, nil
+
+	// type CreateUserParams struct {
+	// 	ID        uuid.UUID
+	// 	CreatedAt time.Time
+	// 	UpdatedAt time.Time
+	// 	Email     string
+	// }
 
 }
 
@@ -248,13 +330,17 @@ type errorJsonStruct struct {
 }
 
 func getDbUrl() (url string, err error) {
-	loadErr := godotenv.Load()
-	if loadErr != nil {
-		return "", loadErr
-	}
 	db_url := os.Getenv("DB_URL")
 	if len(db_url) == 0 {
 		return "", errors.New("DB URL does not exist")
 	}
 	return db_url, nil
+}
+
+func loadEnv() error {
+	loadErr := godotenv.Load()
+	if loadErr != nil {
+		return loadErr
+	}
+	return nil
 }
