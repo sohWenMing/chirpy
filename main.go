@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/sohWenMing/chirpy/internal/database"
 )
@@ -35,6 +36,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/users", createUsersHandler)
 	// mux.HandleFunc("/", baseHandler)
 
 	fileServer := http.FileServer(http.Dir("."))
@@ -122,6 +124,31 @@ func writeErrToResponse(w http.ResponseWriter, errorString string) {
 	w.WriteHeader(400)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(marshalledData))
+
+}
+
+func createUsersHandler(w http.ResponseWriter, r *http.Request) {
+
+	type emailJsonStruct struct {
+		Email string `json:"email"`
+	}
+	// bodyBytes, _ := io.ReadAll(r.Body)
+	// fmt.Printf("bodyBytes: %s\n", bodyBytes)
+	emailJson := emailJsonStruct{}
+
+	decoder := json.NewDecoder(r.Body)
+	decodeErr := decoder.Decode(&emailJson)
+	if decodeErr != nil {
+		writeErrToResponse(w, "bad request: payload could not be processed")
+		return
+	}
+	if emailJson.Email == "" {
+		writeErrToResponse(w, "bad request: email cannot be nil")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "text/plain; encoding=utf8")
+	w.Write([]byte("OK"))
 
 }
 
@@ -221,6 +248,10 @@ type errorJsonStruct struct {
 }
 
 func getDbUrl() (url string, err error) {
+	loadErr := godotenv.Load()
+	if loadErr != nil {
+		return "", loadErr
+	}
 	db_url := os.Getenv("DB_URL")
 	if len(db_url) == 0 {
 		return "", errors.New("DB URL does not exist")
