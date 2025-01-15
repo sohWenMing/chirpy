@@ -65,6 +65,7 @@ type config struct {
 	queries        *database.Queries
 }
 
+// handlers start
 func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	type pararameters struct {
@@ -103,38 +104,6 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	writeValidToReponse(w, strings.Join(validatedStrings, " "))
 
-}
-
-func getStrippedSplitStrings(input string) (outSlice []string) {
-	fmt.Printf("string from input: %s\n", input)
-	returnedSlice := []string{}
-	splitStrings := strings.Split(input, " ")
-	for _, splitString := range splitStrings {
-		returnedSlice = append(returnedSlice, strings.Trim(splitString, " "))
-	}
-	for _, returnString := range returnedSlice {
-		fmt.Printf("return string value: %s\n", returnString)
-	}
-	return returnedSlice
-}
-
-func writeValidToReponse(w http.ResponseWriter, responseString string) {
-	type cleanedParams struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	resBodyStruct := cleanedParams{responseString}
-
-	marshalledData, err := json.Marshal(resBodyStruct)
-	if err != nil {
-		log.Printf("error marshalling JSON: %s", err)
-		w.WriteHeader(400)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(marshalledData))
 }
 
 func writeErrToResponse(w http.ResponseWriter, errorString string) {
@@ -178,6 +147,40 @@ func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 
+}
+
+//handlers end
+
+func getStrippedSplitStrings(input string) (outSlice []string) {
+	fmt.Printf("string from input: %s\n", input)
+	returnedSlice := []string{}
+	splitStrings := strings.Split(input, " ")
+	for _, splitString := range splitStrings {
+		returnedSlice = append(returnedSlice, strings.Trim(splitString, " "))
+	}
+	for _, returnString := range returnedSlice {
+		fmt.Printf("return string value: %s\n", returnString)
+	}
+	return returnedSlice
+}
+
+func writeValidToReponse(w http.ResponseWriter, responseString string) {
+	type cleanedParams struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
+
+	resBodyStruct := cleanedParams{responseString}
+
+	marshalledData, err := json.Marshal(resBodyStruct)
+	if err != nil {
+		log.Printf("error marshalling JSON: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(marshalledData))
 }
 
 func (cfg *config) registerQueries(queries *database.Queries) {
