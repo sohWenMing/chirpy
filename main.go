@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/sohWenMing/chirpy/internal/database"
+	"github.com/sohWenMing/chirpy/mapping"
 )
 
 var profaneStringMap = map[string]bool{
@@ -44,11 +45,11 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", healthCheckHandler)
 	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 
-	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/chirps", cfg.validateChirpHandler)
 	mux.HandleFunc("POST /api/users", cfg.createUsersHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
-
-	// mux.HandleFunc("/", baseHandler)
+	mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIdHandler)
 
 	fileServer := http.FileServer(http.Dir("."))
 	wrappedFileServer := fsWrapper(fileServer)
@@ -80,17 +81,15 @@ type config struct {
 }
 
 // handlers start
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	type pararameters struct {
-		Body string `json:"body"`
+		Body   string `json:"body"`
+		UserID string `json:"user_id"`
 	}
 
-	// body, _ := io.ReadAll(r.Body)
-	// fmt.Printf("request body: %s\n", string(body))
-
 	decoder := json.NewDecoder(r.Body)
-	// decoder.DisallowUnknownFields()
+
 	params := pararameters{}
 
 	jsonDecodeErr := decoder.Decode(&params)
@@ -99,14 +98,96 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		writeErrToResponse(w, "Something went wrong during the decoding of the request body")
 		return
 	}
-	fmt.Printf("value of body in params: %s\n", params.Body)
 
-	if len(params.Body) > 140 {
-		writeErrToResponse(w, "Chirp is too long")
+	userIdUUID, err := uuid.Parse(params.UserID)
+	if err != nil {
+		writeErrToResponse(w, "user id passed in is not valid")
+	}
+
+	isChirpLengthValid := validateChirpLength(params.Body)
+	if isChirpLengthValid {
+		writeErrToResponse(w, "Chirp length is too long")
 		return
 	}
 
-	splitTrimmedStrings := getStrippedSplitStrings(params.Body)
+	validatedBody := getValidatedChirpBody(params.Body)
+
+	createChirpParams := database.CreateChirpParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Body:      validatedBody,
+		UserID:    userIdUUID,
+	}
+
+	chirp, err := cfg.queries.CreateChirp(context.Background(), createChirpParams)
+	if err != nil {
+		fmt.Printf("error from DB: %v", err)
+		writeErrToResponse(w, "error occured on creating chirp")
+		return
+	}
+
+	createdChirpJson := mapping.MapDBChirpToChirpJSONMapping(chirp)
+
+	resBytes, err := json.Marshal(createdChirpJson)
+	if err != nil {
+		writeErrToResponse(w, "error occured on marshalling response")
+	}
+
+	w.WriteHeader(201)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+
+}
+
+func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.queries.GetChirps(context.Background())
+	if err != nil {
+		w.WriteHeader(500)
+		w.Header().Set("content-type", "text/html; charset=UTF-8")
+		w.Write([]byte("Internal database error"))
+	}
+
+	mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
+	resBytes, err := json.Marshal(mappedChirps)
+	if err != nil {
+		writeErrToResponse(w, "error occured on marshalling response")
+	}
+	w.WriteHeader(200)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+}
+
+func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
+	chirpIdString := r.PathValue("chirpID")
+	chirpUUID, err := uuid.Parse(chirpIdString)
+	if err != nil {
+		writeErrToResponse(w, fmt.Sprintf("chirpId %s could not be parsed to a proper chirpId", chirpIdString))
+		return
+	}
+	chirp, err := cfg.queries.GetChirpById(context.Background(), chirpUUID)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows in result set") {
+			writeErrToResponse(w, fmt.Sprintf("chirp with Id %s could not be found", chirpIdString))
+			return
+		}
+		writeErrToResponse(w, err.Error())
+		return
+
+	}
+	jsonResponse := mapping.MapDBChirpToChirpJSONMapping(chirp)
+
+	resBytes, marshalErr := json.Marshal(jsonResponse)
+	if marshalErr != nil {
+		writeErrToResponse(w, "There was a problem with the operation. Please try again later.")
+	}
+	w.WriteHeader(200)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+}
+
+func getValidatedChirpBody(chirpBody string) string {
+	splitTrimmedStrings := getStrippedSplitStrings(chirpBody)
 	validatedStrings := []string{}
 	for _, splitTrimmedString := range splitTrimmedStrings {
 		if _, ok := profaneStringMap[strings.ToLower(splitTrimmedString)]; ok {
@@ -116,8 +197,14 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		validatedStrings = append(validatedStrings, splitTrimmedString)
 	}
 
-	writeValidToReponse(w, strings.Join(validatedStrings, " "))
+	return strings.Join(validatedStrings, " ")
+}
 
+func validateChirpLength(body string) (isValid bool) {
+	if len(body) > 140 {
+		return false
+	}
+	return false
 }
 
 func writeErrToResponse(w http.ResponseWriter, errorString string) {
@@ -204,6 +291,7 @@ func (cfg *config) resetUsersHandler(w http.ResponseWriter, _ *http.Request) {
 	resetErr := cfg.queries.DeleteUsers(context.Background())
 	if resetErr != nil {
 		writeErrToResponse(w, "Error when trying to reset users")
+		return
 	}
 	w.WriteHeader(200)
 	w.Header().Set("Content-Type", "text/plain")
@@ -224,14 +312,6 @@ func createUser(email string, cfg *config) (user database.User, err error) {
 		return database.User{}, createUserErr
 	}
 	return user, nil
-
-	// type CreateUserParams struct {
-	// 	ID        uuid.UUID
-	// 	CreatedAt time.Time
-	// 	UpdatedAt time.Time
-	// 	Email     string
-	// }
-
 }
 
 func (cfg *config) metricsHandler(w http.ResponseWriter, _ *http.Request) {
@@ -261,35 +341,16 @@ func (cfg *config) middlewareMetricsInc(next http.Handler) http.Handler {
 //handlers end
 
 func getStrippedSplitStrings(input string) (outSlice []string) {
-	fmt.Printf("string from input: %s\n", input)
+
 	returnedSlice := []string{}
 	splitStrings := strings.Split(input, " ")
 	for _, splitString := range splitStrings {
 		returnedSlice = append(returnedSlice, strings.Trim(splitString, " "))
 	}
-	for _, returnString := range returnedSlice {
-		fmt.Printf("return string value: %s\n", returnString)
-	}
+	// for _, returnString := range returnedSlice {
+	// 	fmt.Printf("return string value: %s\n", returnString)
+	// }
 	return returnedSlice
-}
-
-func writeValidToReponse(w http.ResponseWriter, responseString string) {
-	type cleanedParams struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	resBodyStruct := cleanedParams{responseString}
-
-	marshalledData, err := json.Marshal(resBodyStruct)
-	if err != nil {
-		log.Printf("error marshalling JSON: %s", err)
-		w.WriteHeader(400)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(marshalledData))
 }
 
 func (cfg *config) registerQueries(queries *database.Queries) {
