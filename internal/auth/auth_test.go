@@ -2,21 +2,20 @@ package auth
 
 import (
 	"fmt"
-	"reflect"
+	"net/http"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
 func TestHashPassword(t *testing.T) {
 	testPassword := "Holoq123holoq123"
-	hash, err := HashPassword(testPassword)
+	_, err := HashPassword(testPassword)
 	if err != nil {
 		t.Error(err)
 	}
-	fmt.Printf("hash result: %s", hash)
+
 }
 
 func TestCheckPasswordHash(t *testing.T) {
@@ -66,20 +65,6 @@ func TestCheckPasswordHash(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestMakeJWTAndParse(t *testing.T) {
-	uuid := uuid.New()
-	tokenString := getTokenString(t, uuid, 3*time.Second, "this is my secret")
-	claims := jwt.RegisteredClaims{}
-	parser := jwt.NewParser()
-	parser.ParseUnverified(tokenString, &claims)
-	val := reflect.ValueOf(claims)
-	for i := 0; i < val.NumField(); i++ {
-		field := val.Type().Field(i)
-		fieldValue := val.Field(i)
-		fmt.Printf("%s: %v\n", field.Name, fieldValue)
 	}
 }
 
@@ -142,6 +127,68 @@ func TestParseTokenString(t *testing.T) {
 
 		})
 	}
+}
+
+func TestGetBearerToken(t *testing.T) {
+	type testStruct struct {
+		name               string
+		token              string
+		bearerString       string
+		isErrExpected      bool
+		isSetAuthorization bool
+	}
+
+	tests := []testStruct{
+
+		{
+			"passing test case",
+			"Token123",
+			"Bearer Token123",
+			false,
+			true,
+		},
+		{
+			"failing test case no auth",
+			"",
+			"",
+			true,
+			false,
+		},
+		{
+			"failing no bearer",
+			"Token123",
+			"Token123",
+			true,
+			true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet,
+				"www.testURL.com", nil)
+			if err != nil {
+				t.Errorf("didn't expect error, got %v", err)
+			}
+			if test.isSetAuthorization {
+				req.Header.Set("Authorization", test.bearerString)
+			}
+			_, getBearerErr := GetBearerToken(req.Header)
+			switch test.isErrExpected {
+			case true:
+				if getBearerErr == nil {
+					t.Errorf("expected error, didn't get one")
+				}
+			case false:
+				if getBearerErr != nil {
+					t.Errorf("didn't expect error, got %v", getBearerErr)
+				}
+			}
+
+		})
+
+	}
+
 }
 
 func getTokenString(t *testing.T, uuid uuid.UUID, duration time.Duration, secret string) string {

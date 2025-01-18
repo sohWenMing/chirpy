@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/sohWenMing/chirpy/internal/auth"
 	"github.com/sohWenMing/chirpy/internal/database"
 	"github.com/sohWenMing/chirpy/mapping"
 )
@@ -27,6 +28,7 @@ var profaneStringMap = map[string]bool{
 }
 
 func main() {
+
 	loadEnvErr := loadEnv()
 	if loadEnvErr != nil {
 		log.Fatal("error when loading environment, program exited")
@@ -36,8 +38,14 @@ func main() {
 	if platform == "" {
 		log.Fatal("PLATFORM env var was not successfully loaded")
 	}
+
+	secret := os.Getenv("SECRET")
+	if secret == "" {
+		log.Fatal("SECRET env var was not successfully loaded")
+	}
 	cfg := config{}
 	cfg.platform = platform
+	cfg.secret = secret
 	db := loadPostgresDB()
 	cfg.registerQueries(database.New(db))
 	mux := http.NewServeMux()
@@ -47,6 +55,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/chirps", cfg.validateChirpHandler)
 	mux.HandleFunc("POST /api/users", cfg.createUsersHandler)
+	mux.HandleFunc("POST /api/login", cfg.loginUserHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIdHandler)
@@ -78,6 +87,7 @@ type config struct {
 	fileServerHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	secret         string
 }
 
 // handlers start
@@ -166,14 +176,9 @@ func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chirp, err := cfg.queries.GetChirpById(context.Background(), chirpUUID)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows in result set") {
-			writeErrToResponse(w, fmt.Sprintf("chirp with Id %s could not be found", chirpIdString))
-			return
-		}
-		writeErrToResponse(w, err.Error())
+	shouldReturnEarly := checkDBErrAndWriteErr(err, w, fmt.Sprintf("chirp with Id %s could not be found", chirpIdString))
+	if shouldReturnEarly {
 		return
-
 	}
 	jsonResponse := mapping.MapDBChirpToChirpJSONMapping(chirp)
 
@@ -184,6 +189,87 @@ func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	w.Header().Set("content-type", "application/json")
 	w.Write(resBytes)
+}
+
+func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
+	type loginPayloadStruct struct {
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
+	}
+
+	payload := loginPayloadStruct{}
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&payload)
+
+	if err != nil {
+		writeErrToResponse(w, "bad request")
+	}
+
+	user, err := cfg.queries.GetUserByEmail(context.Background(), payload.Email)
+
+	shouldReturnEarly := checkDBErrAndWriteErr(err, w, "user with email could not be found")
+	if shouldReturnEarly {
+		return
+	}
+
+	isHashCheckErr := auth.CheckPasswordHash(payload.Password, user.HashedPassword.String)
+	if isHashCheckErr != nil {
+		w.WriteHeader(401)
+		w.Header().Set("content-type", "text-plain")
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+	if payload.ExpiresInSeconds == 0 {
+		payload.ExpiresInSeconds = 60 * 60
+	}
+
+	if payload.ExpiresInSeconds > 60*60 {
+		payload.ExpiresInSeconds = 60 * 60
+	}
+	tokenString, err := auth.MakeJWTWithClaims(user.ID, cfg.secret, time.Duration(payload.ExpiresInSeconds))
+	if err != nil {
+		writeErrToResponse(w, err.Error())
+	}
+
+	type returnPayloadStruct struct {
+		Id         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+		Token      string    `json:"token"`
+	}
+
+	returnPayload := returnPayloadStruct{
+		Id:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+		Token:      tokenString,
+	}
+
+	resBytes, jsonMarshaErr := json.Marshal(returnPayload)
+	if jsonMarshaErr != nil {
+		writeErrToResponse(w, "there was a problem logging in the user")
+	}
+	w.WriteHeader(200)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+
+}
+
+func checkDBErrAndWriteErr(err error, w http.ResponseWriter, errorString string) bool {
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows in result set") {
+			writeErrToResponse(w, errorString)
+			return true
+		}
+		writeErrToResponse(w, err.Error())
+		return true
+
+	}
+	return false
 }
 
 func getValidatedChirpBody(chirpBody string) string {
@@ -228,25 +314,26 @@ func writeErrToResponse(w http.ResponseWriter, errorString string) {
 
 func (cfg *config) createUsersHandler(w http.ResponseWriter, r *http.Request) {
 
-	type emailJsonStruct struct {
-		Email string `json:"email"`
+	type createUserPayload struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	// bodyBytes, _ := io.ReadAll(r.Body)
 	// fmt.Printf("bodyBytes: %s\n", bodyBytes)
-	emailJson := emailJsonStruct{}
+	payloadJson := createUserPayload{}
 
 	decoder := json.NewDecoder(r.Body)
-	decodeErr := decoder.Decode(&emailJson)
+	decodeErr := decoder.Decode(&payloadJson)
 	if decodeErr != nil {
 		writeErrToResponse(w, "bad request: payload could not be processed")
 		return
 	}
-	if emailJson.Email == "" {
-		writeErrToResponse(w, "bad request: email cannot be nil")
+	if payloadJson.Email == "" || payloadJson.Password == "" {
+		writeErrToResponse(w, "bad request: mandatory inputs not filled")
 		return
 	}
 
-	user, createUserErr := createUser(emailJson.Email, cfg)
+	user, createUserErr := createUser(payloadJson.Email, payloadJson.Password, cfg)
 	if createUserErr != nil {
 		writeErrToResponse(w, fmt.Sprintf("database error: %s", createUserErr.Error()))
 		return
@@ -299,12 +386,19 @@ func (cfg *config) resetUsersHandler(w http.ResponseWriter, _ *http.Request) {
 
 }
 
-func createUser(email string, cfg *config) (user database.User, err error) {
+func createUser(email, password string, cfg *config) (user database.User, err error) {
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return database.User{}, err
+	}
 	params := database.CreateUserParams{
 		ID:        uuid.New(),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Email:     email,
+		HashedPassword: sql.NullString{
+			String: hash,
+			Valid:  true},
 	}
 
 	user, createUserErr := cfg.queries.CreateUser(context.Background(), params)
