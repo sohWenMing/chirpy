@@ -59,7 +59,7 @@ func main() {
 	mux.HandleFunc("POST /api/login", cfg.loginUserHandler)
 	mux.HandleFunc("POST /api/refresh", cfg.refreshTokenHandler)
 	mux.HandleFunc("POST /api/revoke", cfg.revokeRefreshTokenHandler)
-
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirpHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIdHandler)
@@ -72,7 +72,9 @@ func main() {
 		Handler: mux,
 		Addr:    ":8080",
 	}
-	server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal("Server failed to start:", err)
+	}
 }
 
 func loadPostgresDB() *sql.DB {
@@ -141,14 +143,6 @@ func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	//return response
-	type returnPayloadStruct struct {
-		Id           uuid.UUID `json:"id"`
-		Created_at   time.Time `json:"created_at"`
-		Updated_at   time.Time `json:"updated_at"`
-		Email        string    `json:"email"`
-		Token        string    `json:"token"`
-		RefreshToken string    `json:"refresh_token"`
-	}
 
 	returnPayload := mapping.MapUserInfoWithTokensJSONMap(user, tokenString, returnedDBRefreshToken.ID)
 	resBytes, jsonMarshaErr := json.Marshal(returnPayload)
@@ -322,15 +316,8 @@ func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	token, err := auth.GetBearerToken(r.Header)
-	if err != nil {
-		write401Error(w)
-		return
-	}
-
-	userUuid, err := auth.ValidateJWT(token, cfg.secret)
-	if err != nil {
-		write401Error(w)
+	userUuid, shouldReturn := validateJWT(r, w, cfg)
+	if shouldReturn {
 		return
 	}
 
@@ -371,6 +358,42 @@ func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(201)
 	w.Header().Set("content-type", "application/json")
 	w.Write(resBytes)
+}
+
+func (cfg *config) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
+	//first thing, get the chirpId from the path value
+	chirpId := r.PathValue("chirpID")
+	userUuid, shouldReturn := validateJWT(r, w, cfg)
+	if shouldReturn {
+		return
+	}
+	chirpIdUUID, err := uuid.Parse(chirpId)
+	if err != nil {
+		writeErrToResponse(w, "chirp Id passed in parameters wasn't valid")
+		return
+	}
+
+	chirpToDelete, err := cfg.queries.GetChirpById(context.Background(), chirpIdUUID)
+	if err != nil {
+		w.Header().Set("content-type", "text/plain")
+		w.WriteHeader(404)
+		w.Write([]byte("chirp with id was not found"))
+		return
+	}
+	if userUuid != chirpToDelete.UserID {
+		w.Header().Set("content-type", "text/plain")
+		w.WriteHeader(403)
+		w.Write([]byte("403 Forbidden"))
+		return
+	}
+	deleteErr := cfg.queries.DeleteChirpById(context.Background(), chirpToDelete.ID)
+	if deleteErr != nil {
+		w.Header().Set("content-type", "text/plain")
+		w.WriteHeader(500)
+		w.Write([]byte("database error"))
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
@@ -443,13 +466,27 @@ func mapCreateRefreshTokenParams(refreshTokenString string, userId uuid.UUID) da
 	}
 }
 
+func validateJWT(r *http.Request, w http.ResponseWriter, cfg *config) (uuid.UUID, bool) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		write401Error(w)
+		return uuid.UUID{}, true
+	}
+
+	userUuid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		write401Error(w)
+		return uuid.UUID{}, true
+	}
+	return userUuid, false
+}
 func checkDBErrAndWriteErr(err error, w http.ResponseWriter, errorString string) bool {
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows in result set") {
-			writeErrToResponse(w, errorString)
+			write404ErrToResponse(w, errorString)
 			return true
 		}
-		writeErrToResponse(w, err.Error())
+		write404ErrToResponse(w, err.Error())
 		return true
 
 	}
@@ -497,6 +534,25 @@ func writeErrToResponse(w http.ResponseWriter, errorString string) {
 	}
 
 	w.WriteHeader(400)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(marshalledData))
+
+}
+
+func write404ErrToResponse(w http.ResponseWriter, errorString string) {
+
+	errorStruct := errorJsonStruct{
+		ErrorString: errorString,
+	}
+	marshalledData, err := json.Marshal(errorStruct)
+
+	if err != nil {
+		log.Printf("error marshalling JSON: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+
+	w.WriteHeader(404)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(marshalledData))
 
