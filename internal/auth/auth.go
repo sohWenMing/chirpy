@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -27,8 +30,8 @@ func CheckPasswordHash(password, hash string) (err error) {
 	return hashErr
 }
 
-func MakeJWTWithClaims(uuid uuid.UUID, secret string, expirationTime time.Duration) (string, error) {
-	expiration := time.Now().Add(expirationTime)
+func MakeJWTWithClaims(uuid uuid.UUID, secret string) (string, error) {
+	expiration := time.Now().Add(3600 * time.Second)
 	uuidString := uuid.String()
 	if uuidString == "" {
 		return "", errors.New("uuid passed in could not be parsed to string")
@@ -59,13 +62,17 @@ func ValidateJWT(tokenString, secret string) (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 	if !token.Valid {
-		return uuid.Nil, err
+		fmt.Println("error at token.Valid")
+
+		return uuid.Nil, errors.New("token is not valid")
 	}
 	if claims.ExpiresAt.Time.Before(time.Now()) {
+		fmt.Println("problem is at expires at")
 		return uuid.Nil, errors.New("token has expired")
 	}
 	parseUUID, err := uuid.Parse(claims.Subject)
 	if err != nil {
+		fmt.Println("problem is at parseUUID")
 		return uuid.Nil, err
 	}
 	return parseUUID, nil
@@ -85,4 +92,15 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 	return tokenString, nil
 
+}
+
+func MakeRefreshToken() (string, error) {
+	bytes := make([]byte, 32)
+	//this
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(bytes), nil
 }

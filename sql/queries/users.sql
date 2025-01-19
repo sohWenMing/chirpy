@@ -15,3 +15,9 @@ users.*
 FROM users
 WHERE users.email = $1
 LIMIT 1;
+
+-- name: GetUserByUUID :one
+SELECT users.*
+ FROM users
+ WHERE users.id = $1
+LIMIT 1;

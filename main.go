@@ -56,6 +56,9 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", cfg.validateChirpHandler)
 	mux.HandleFunc("POST /api/users", cfg.createUsersHandler)
 	mux.HandleFunc("POST /api/login", cfg.loginUserHandler)
+	mux.HandleFunc("POST /api/refresh", cfg.refreshTokenHandler)
+	mux.HandleFunc("POST /api/revoke", cfg.revokeRefreshTokenHandler)
+
 	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIdHandler)
@@ -91,6 +94,158 @@ type config struct {
 }
 
 // handlers start
+func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
+
+	//decode payload from request
+	type loginPayloadStruct struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	payload := loginPayloadStruct{}
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&payload)
+
+	if err != nil {
+		writeErrToResponse(w, "bad request")
+	}
+
+	//check that user exists in database
+	user, err := cfg.queries.GetUserByEmail(context.Background(), payload.Email)
+
+	shouldReturnEarly := checkDBErrAndWriteErr(err, w, "user with email could not be found")
+	if shouldReturnEarly {
+		return
+	}
+
+	//verify password against hash in database
+	isHashCheckErr := auth.CheckPasswordHash(payload.Password, user.HashedPassword.String)
+	if isHashCheckErr != nil {
+		w.WriteHeader(401)
+		w.Header().Set("content-type", "text-plain")
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+
+	//create JTW Token
+	tokenString, err := auth.MakeJWTWithClaims(user.ID, cfg.secret)
+	if err != nil {
+		writeErrToResponse(w, err.Error())
+	}
+
+	//generate data from refresh token
+	returnedDBRefreshToken, err := makeNewRefreshToken(w, cfg, user.ID)
+	if err != nil {
+		return
+	}
+	//return response
+	type returnPayloadStruct struct {
+		Id           uuid.UUID `json:"id"`
+		Created_at   time.Time `json:"created_at"`
+		Updated_at   time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
+	}
+
+	returnPayload := returnPayloadStruct{
+		Id:           user.ID,
+		Created_at:   user.CreatedAt,
+		Updated_at:   user.UpdatedAt,
+		Email:        user.Email,
+		Token:        tokenString,
+		RefreshToken: returnedDBRefreshToken.ID,
+	}
+
+	resBytes, jsonMarshaErr := json.Marshal(returnPayload)
+	if jsonMarshaErr != nil {
+		writeErrToResponse(w, "there was a problem logging in the user")
+	}
+	w.WriteHeader(200)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+
+}
+
+func (cfg *config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+
+	//get refreshToken from request, strip out bearer
+	refreshTokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		write401Error(w)
+		return
+	}
+
+	refreshTokenInfo, err := cfg.queries.GetRefreshTokenById(context.Background(), refreshTokenString)
+	//if there was database error, means token info could no be retrieved. return 401
+	if err != nil {
+		write401Error(w)
+		return
+	}
+	//return 401 if expired
+	if refreshTokenInfo.ExpiresAt.Before(time.Now()) {
+		write401Error(w)
+		return
+	}
+
+	if refreshTokenInfo.RevokedAt.Valid {
+		write401Error(w)
+		return
+	}
+
+	//attempt to make new access token, if error, return 500
+	newAccessToken, err := auth.MakeJWTWithClaims(refreshTokenInfo.UserID, cfg.secret)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Header().Set("content-type", "text/plain")
+		w.Write([]byte("Internal Error"))
+		return
+	}
+
+	type tokenReturnStruct struct {
+		Token string `json:"token"`
+	}
+
+	resPayload := tokenReturnStruct{Token: newAccessToken}
+	resBytes, marshalErr := json.Marshal(resPayload)
+	if marshalErr != nil {
+		w.WriteHeader(500)
+		w.Header().Set("content-type", "text/plain")
+		w.Write([]byte("Internal Error"))
+		return
+	}
+	w.WriteHeader(200)
+	w.Header().Set("content-type", "application/json")
+	w.Write(resBytes)
+
+}
+
+func (cfg *config) revokeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		writeErrToResponse(w, "token not found")
+		return
+	}
+
+	params := database.RevokeRefreshTokenParams{
+		ID:        refreshToken,
+		UpdatedAt: time.Now(),
+		RevokedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+	}
+	revokeErr := cfg.queries.RevokeRefreshToken(context.Background(), params)
+	if revokeErr != nil {
+		w.Header().Set("content-type", "text/plain")
+		w.WriteHeader(500)
+		w.Write([]byte("error when revoking token"))
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	type pararameters struct {
@@ -109,10 +264,22 @@ func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	userIdUUID, err := uuid.Parse(params.UserID)
+	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		writeErrToResponse(w, "user id passed in is not valid")
+		write401Error(w)
+		return
 	}
+
+	userUuid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		write401Error(w)
+		return
+	}
+
+	// _, getUserErr := cfg.queries.GetUserByUUID(context.Background(), userUuid)
+	// if getUserErr != nil {
+	// 	write401Error(w)
+	// }
 
 	isChirpLengthValid := validateChirpLength(params.Body)
 	if isChirpLengthValid {
@@ -127,12 +294,11 @@ func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) 
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Body:      validatedBody,
-		UserID:    userIdUUID,
+		UserID:    userUuid,
 	}
 
 	chirp, err := cfg.queries.CreateChirp(context.Background(), createChirpParams)
 	if err != nil {
-		fmt.Printf("error from DB: %v", err)
 		writeErrToResponse(w, "error occured on creating chirp")
 		return
 	}
@@ -147,7 +313,6 @@ func (cfg *config) validateChirpHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(201)
 	w.Header().Set("content-type", "application/json")
 	w.Write(resBytes)
-
 }
 
 func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
@@ -191,72 +356,33 @@ func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(resBytes)
 }
 
-func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
-	type loginPayloadStruct struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
-	}
-
-	payload := loginPayloadStruct{}
-
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&payload)
-
-	if err != nil {
-		writeErrToResponse(w, "bad request")
-	}
-
-	user, err := cfg.queries.GetUserByEmail(context.Background(), payload.Email)
-
-	shouldReturnEarly := checkDBErrAndWriteErr(err, w, "user with email could not be found")
-	if shouldReturnEarly {
-		return
-	}
-
-	isHashCheckErr := auth.CheckPasswordHash(payload.Password, user.HashedPassword.String)
-	if isHashCheckErr != nil {
-		w.WriteHeader(401)
-		w.Header().Set("content-type", "text-plain")
-		w.Write([]byte("Incorrect email or password"))
-		return
-	}
-	if payload.ExpiresInSeconds == 0 {
-		payload.ExpiresInSeconds = 60 * 60
-	}
-
-	if payload.ExpiresInSeconds > 60*60 {
-		payload.ExpiresInSeconds = 60 * 60
-	}
-	tokenString, err := auth.MakeJWTWithClaims(user.ID, cfg.secret, time.Duration(payload.ExpiresInSeconds))
+func makeNewRefreshToken(w http.ResponseWriter, cfg *config, userId uuid.UUID) (token database.RefreshToken, err error) {
+	nullToken := database.RefreshToken{}
+	refreshTokenString, err := auth.MakeRefreshToken()
 	if err != nil {
 		writeErrToResponse(w, err.Error())
+		return nullToken, err
 	}
 
-	type returnPayloadStruct struct {
-		Id         uuid.UUID `json:"id"`
-		Created_at time.Time `json:"created_at"`
-		Updated_at time.Time `json:"updated_at"`
-		Email      string    `json:"email"`
-		Token      string    `json:"token"`
-	}
+	//store refresh token in DB
+	returnedDBRefreshToken, err := cfg.queries.CreateRefreshToken(context.Background(), mapCreateRefreshTokenParams(refreshTokenString, userId))
 
-	returnPayload := returnPayloadStruct{
-		Id:         user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email:      user.Email,
-		Token:      tokenString,
+	if err != nil {
+		writeErrToResponse(w, err.Error())
+		return nullToken, err
 	}
+	return returnedDBRefreshToken, nil
+}
 
-	resBytes, jsonMarshaErr := json.Marshal(returnPayload)
-	if jsonMarshaErr != nil {
-		writeErrToResponse(w, "there was a problem logging in the user")
+func mapCreateRefreshTokenParams(refreshTokenString string, userId uuid.UUID) database.CreateRefreshTokenParams {
+	return database.CreateRefreshTokenParams{
+		ID:        refreshTokenString,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    userId,
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+		RevokedAt: sql.NullTime{},
 	}
-	w.WriteHeader(200)
-	w.Header().Set("content-type", "application/json")
-	w.Write(resBytes)
-
 }
 
 func checkDBErrAndWriteErr(err error, w http.ResponseWriter, errorString string) bool {
@@ -293,6 +419,12 @@ func validateChirpLength(body string) (isValid bool) {
 	return false
 }
 
+func write401Error(w http.ResponseWriter) {
+	w.WriteHeader(401)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("401 Unauthorized"))
+}
+
 func writeErrToResponse(w http.ResponseWriter, errorString string) {
 
 	errorStruct := errorJsonStruct{
@@ -318,8 +450,6 @@ func (cfg *config) createUsersHandler(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	// bodyBytes, _ := io.ReadAll(r.Body)
-	// fmt.Printf("bodyBytes: %s\n", bodyBytes)
 	payloadJson := createUserPayload{}
 
 	decoder := json.NewDecoder(r.Body)
@@ -442,7 +572,6 @@ func getStrippedSplitStrings(input string) (outSlice []string) {
 		returnedSlice = append(returnedSlice, strings.Trim(splitString, " "))
 	}
 	// for _, returnString := range returnedSlice {
-	// 	fmt.Printf("return string value: %s\n", returnString)
 	// }
 	return returnedSlice
 }
