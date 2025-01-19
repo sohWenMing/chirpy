@@ -55,6 +55,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/chirps", cfg.validateChirpHandler)
 	mux.HandleFunc("POST /api/users", cfg.createUsersHandler)
+	mux.HandleFunc("PUT /api/users", cfg.updateUserInfoHandler)
 	mux.HandleFunc("POST /api/login", cfg.loginUserHandler)
 	mux.HandleFunc("POST /api/refresh", cfg.refreshTokenHandler)
 	mux.HandleFunc("POST /api/revoke", cfg.revokeRefreshTokenHandler)
@@ -149,15 +150,7 @@ func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string    `json:"refresh_token"`
 	}
 
-	returnPayload := returnPayloadStruct{
-		Id:           user.ID,
-		Created_at:   user.CreatedAt,
-		Updated_at:   user.UpdatedAt,
-		Email:        user.Email,
-		Token:        tokenString,
-		RefreshToken: returnedDBRefreshToken.ID,
-	}
-
+	returnPayload := mapping.MapUserInfoWithTokensJSONMap(user, tokenString, returnedDBRefreshToken.ID)
 	resBytes, jsonMarshaErr := json.Marshal(returnPayload)
 	if jsonMarshaErr != nil {
 		writeErrToResponse(w, "there was a problem logging in the user")
@@ -218,6 +211,71 @@ func (cfg *config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	w.Header().Set("content-type", "application/json")
 	w.Write(resBytes)
+
+}
+
+func (cfg *config) updateUserInfoHandler(w http.ResponseWriter, r *http.Request) {
+	//first check the the authorization
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		write401Error(w)
+		return
+	}
+
+	//validate JWT token, if vaidated will return the correct UserId
+	userUuid, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		write401Error(w)
+		return
+	}
+	//decode payload
+	type payloadStruct struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	payload := payloadStruct{}
+
+	decoder := json.NewDecoder(r.Body)
+	jsonDecodeErr := decoder.Decode(&payload)
+
+	if jsonDecodeErr != nil {
+		writeErrToResponse(w, "bad request")
+		return
+	}
+
+	//hash hew password
+	hashedPW, err := auth.HashPassword(payload.Password)
+	if err != nil {
+		writeErrToResponse(w, "there was a problem with the request")
+		return
+	}
+
+	//update new user information in user table
+	params := database.UpdateUserParams{
+		Email: payload.Email,
+		HashedPassword: sql.NullString{
+			String: hashedPW,
+			Valid:  true},
+		ID:        userUuid,
+		UpdatedAt: time.Now(),
+	}
+	newUserInfo, err := cfg.queries.UpdateUser(context.Background(), params)
+	if err != nil {
+		w.Header().Set("content-type", "text/plain")
+		w.WriteHeader(500)
+		w.Write([]byte("internal database error"))
+		return
+	}
+
+	resbytes, jsonMappingErr := json.Marshal(mapping.MapUserInfoJSONMap(newUserInfo))
+	if jsonMappingErr != nil {
+		writeErrToResponse(w, "there was a problem with the request")
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resbytes)
 
 }
 

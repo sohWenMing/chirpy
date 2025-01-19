@@ -15,6 +15,24 @@ type ChirpJSONMap struct {
 	UserID    uuid.UUID `json:"user_id"`
 }
 
+type UserInfoWithTokensJSONMap struct {
+	Id           uuid.UUID `json:"id"`
+	Created_at   time.Time `json:"created_at"`
+	Updated_at   time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
+}
+
+type UserInfoJSONMap struct {
+	Id           uuid.UUID `json:"id"`
+	Created_at   time.Time `json:"created_at"`
+	Updated_at   time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
+}
+
 func MapDBChirpToChirpJSONMapping(dbChirp database.Chirp) ChirpJSONMap {
 	return ChirpJSONMap{
 		Id:        dbChirp.ID,
@@ -32,4 +50,26 @@ func MapDBChirpsToChirpJSONMappings(dbChirps []database.Chirp) (chirpJSONMaps []
 		returnedJSONMaps = append(returnedJSONMaps, chirpJSONMap)
 	}
 	return returnedJSONMaps
+}
+
+func MapUserInfoWithTokensJSONMap(user database.User, tokenString, refreshTokenString string) UserInfoWithTokensJSONMap {
+	mappedJSON := UserInfoWithTokensJSONMap{
+		Id:           user.ID,
+		Created_at:   user.CreatedAt,
+		Updated_at:   user.UpdatedAt,
+		Email:        user.Email,
+		Token:        tokenString,
+		RefreshToken: refreshTokenString,
+	}
+	return mappedJSON
+}
+
+func MapUserInfoJSONMap(user database.User) UserInfoJSONMap {
+	mappedJSON := UserInfoJSONMap{
+		Id:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+	}
+	return mappedJSON
 }

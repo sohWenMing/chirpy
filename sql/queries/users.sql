@@ -21,3 +21,14 @@ SELECT users.*
  FROM users
  WHERE users.id = $1
 LIMIT 1;
+
+-- name: UpdateUser :one
+
+UPDATE users
+   SET email = $1,
+       hashed_password = $2,
+       updated_at = $3
+WHERE id = $4
+RETURNING *;
+
+
