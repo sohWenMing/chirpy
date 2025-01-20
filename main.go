@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -433,6 +434,11 @@ func (cfg *config) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	authorId := r.URL.Query().Get("author_id")
+	fmt.Printf("url passed in: %s\n", r.URL.Path)
+
+	sortBy := r.URL.Query().Get("sort")
+	fmt.Printf("sortby: %s\n", sortBy)
+
 	switch authorId == "" {
 	case true:
 		chirps, err := cfg.queries.GetChirps(context.Background())
@@ -444,6 +450,12 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
 		resBytes, err := json.Marshal(mappedChirps)
+		if sortBy == "desc" {
+			sort.Slice(chirps, func(i int, j int) bool {
+				return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+			})
+		}
+
 		if err != nil {
 			writeErrToResponse(w, "error occured on marshalling response")
 			return
@@ -471,6 +483,12 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeErrToResponse(w, "error occured on marshalling response")
 			return
+		}
+
+		if sortBy == "desc" {
+			sort.Slice(chirps, func(i int, j int) bool {
+				return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+			})
 		}
 		w.WriteHeader(200)
 		w.Header().Set("content-type", "application/json")
