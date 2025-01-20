@@ -63,7 +63,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", cfg.resetUsersHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIdHandler)
-
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.setIsUserChirpRedHandler)
 	fileServer := http.FileServer(http.Dir("."))
 	wrappedFileServer := fsWrapper(fileServer)
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(wrappedFileServer)))
@@ -155,6 +155,11 @@ func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 func (cfg *config) setIsUserChirpRedHandler(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r)
+	if err != nil || apiKey != os.Getenv("POLKA_KEY") {
+		w.WriteHeader(401)
+		return
+	}
 	type reqBody struct {
 		Event string `json:"event"`
 		Data  struct {
@@ -427,21 +432,27 @@ func (cfg *config) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.queries.GetChirps(context.Background())
-	if err != nil {
-		w.WriteHeader(500)
-		w.Header().Set("content-type", "text/html; charset=UTF-8")
-		w.Write([]byte("Internal database error"))
+	authorId := r.URL.Query().Get("author_id")
+	switch authorId == "" {
+	case true:
+		chirps, err := cfg.queries.GetChirps(context.Background())
+		if err != nil {
+			w.WriteHeader(500)
+			w.Header().Set("content-type", "text/html; charset=UTF-8")
+			w.Write([]byte("Internal database error"))
+			return
+		}
+		mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
+		resBytes, err := json.Marshal(mappedChirps)
+		if err != nil {
+			writeErrToResponse(w, "error occured on marshalling response")
+			return
+		}
+		w.WriteHeader(200)
+		w.Header().Set("content-type", "application/json")
+		w.Write(resBytes)
+		return
 	}
-
-	mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
-	resBytes, err := json.Marshal(mappedChirps)
-	if err != nil {
-		writeErrToResponse(w, "error occured on marshalling response")
-	}
-	w.WriteHeader(200)
-	w.Header().Set("content-type", "application/json")
-	w.Write(resBytes)
 }
 
 func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
@@ -614,17 +625,19 @@ func (cfg *config) createUsersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type createdUserStruct struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 
 	structToMarshal := createdUserStruct{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed.Bool,
 	}
 
 	body, err := json.Marshal(structToMarshal)

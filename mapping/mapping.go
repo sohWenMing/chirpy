@@ -22,6 +22,7 @@ type UserInfoWithTokensJSONMap struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type UserInfoJSONMap struct {
@@ -31,6 +32,7 @@ type UserInfoJSONMap struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 func MapDBChirpToChirpJSONMapping(dbChirp database.Chirp) ChirpJSONMap {
@@ -60,16 +62,18 @@ func MapUserInfoWithTokensJSONMap(user database.User, tokenString, refreshTokenS
 		Email:        user.Email,
 		Token:        tokenString,
 		RefreshToken: refreshTokenString,
+		IsChirpyRed:  user.IsChirpyRed.Bool,
 	}
 	return mappedJSON
 }
 
 func MapUserInfoJSONMap(user database.User) UserInfoJSONMap {
 	mappedJSON := UserInfoJSONMap{
-		Id:         user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email:      user.Email,
+		Id:          user.ID,
+		Created_at:  user.CreatedAt,
+		Updated_at:  user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed.Bool,
 	}
 	return mappedJSON
 }
