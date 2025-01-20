@@ -154,7 +154,37 @@ func (cfg *config) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(resBytes)
 
 }
+func (cfg *config) setIsUserChirpRedHandler(w http.ResponseWriter, r *http.Request) {
+	type reqBody struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		}
+	}
+	data := reqBody{}
+	decoder := json.NewDecoder(r.Body)
+	jsonDecodeErr := decoder.Decode(&data)
+	if jsonDecodeErr != nil {
+		writeErrToResponse(w, "error decoding payload body")
+		return
+	}
+	if data.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+	uuid, parseErr := uuid.Parse(data.Data.UserID)
+	if parseErr != nil {
+		writeErrToResponse(w, "used Id is invalid")
+	}
 
+	dbErr := cfg.queries.UpgradeUser(context.Background(), uuid)
+	if dbErr != nil {
+		w.WriteHeader(404)
+		w.Write([]byte("user not found"))
+		return
+	}
+	w.WriteHeader(204)
+}
 func (cfg *config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	//get refreshToken from request, strip out bearer

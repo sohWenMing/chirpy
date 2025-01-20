@@ -16,9 +16,9 @@ FROM users
 WHERE users.email = $1
 LIMIT 1;
 
--- name: GetUserByUUID :one
+-- name: GetUserByUUID :one 
 SELECT users.*
- FROM users
+  FROM users
  WHERE users.id = $1
 LIMIT 1;
 
@@ -31,4 +31,9 @@ UPDATE users
 WHERE id = $4
 RETURNING *;
 
+-- name: UpgradeUser :exec
+
+UPDATE users
+   SET is_chirpy_red = true
+  WHERE id = $1; 
 
