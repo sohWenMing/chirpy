@@ -452,7 +452,32 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.Write(resBytes)
 		return
+	case false:
+		authorIdUuid, err := uuid.Parse(authorId)
+		if err != nil {
+			writeErrToResponse(w, "authorId could not be parsed")
+			return
+		}
+		chirps, err := cfg.queries.GetChirpsByAuthorId(context.Background(), authorIdUuid)
+		if err != nil {
+			w.WriteHeader(500)
+			w.Header().Set("content-type", "text/html; charset=UTF-8")
+			w.Write([]byte("Internal database error"))
+			return
+		}
+
+		mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
+		resBytes, err := json.Marshal(mappedChirps)
+		if err != nil {
+			writeErrToResponse(w, "error occured on marshalling response")
+			return
+		}
+		w.WriteHeader(200)
+		w.Header().Set("content-type", "application/json")
+		w.Write(resBytes)
+		return
 	}
+
 }
 
 func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {

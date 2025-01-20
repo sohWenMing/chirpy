@@ -1,5 +1,4 @@
 -- name: CreateChirp :one
-
 INSERT INTO chirps (id, created_at, updated_at, body, user_id)
 VALUES (
     $1, $2, $3, $4, $5
@@ -7,7 +6,6 @@ VALUES (
 RETURNING *;
 
 -- name: GetChirps :many
-
 SELECT * FROM chirps
  ORDER BY chirps.created_at ASC;
 
@@ -15,12 +13,11 @@ SELECT * FROM chirps
  SELECT * FROM chirps
   WHERE chirps.id = $1;
 
-
 -- name: DeleteChirpById :exec
  DELETE from chirps
  where chirps.id = $1;
 
--- name: GetChirpsByAuthorId :many 
+-- name: GetChirpsByAuthorId :many
 SELECT * from chirps
   WHERE user_id = $1
   ORDER BY created_at ASC;
