@@ -440,6 +440,7 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("sortby: %s\n", sortBy)
 
 	switch authorId == "" {
+	//handle the true case, where there is no author Id defined
 	case true:
 		chirps, err := cfg.queries.GetChirps(context.Background())
 		if err != nil {
@@ -448,13 +449,11 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("Internal database error"))
 			return
 		}
+		// after getting the records from the DB, only if the sortBy is desc, then sort it. else it is already sorted by created by
+		sortIfDesc(sortBy, chirps)
 		mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
+
 		resBytes, err := json.Marshal(mappedChirps)
-		if sortBy == "desc" {
-			sort.Slice(chirps, func(i int, j int) bool {
-				return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
-			})
-		}
 
 		if err != nil {
 			writeErrToResponse(w, "error occured on marshalling response")
@@ -464,6 +463,7 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.Write(resBytes)
 		return
+
 	case false:
 		authorIdUuid, err := uuid.Parse(authorId)
 		if err != nil {
@@ -477,6 +477,8 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("Internal database error"))
 			return
 		}
+		// after getting the records from the DB, only if the sortBy id desc, the sort it. else it is already sorted by
+		sortIfDesc(sortBy, chirps)
 
 		mappedChirps := mapping.MapDBChirpsToChirpJSONMappings(chirps)
 		resBytes, err := json.Marshal(mappedChirps)
@@ -485,17 +487,20 @@ func (cfg *config) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if sortBy == "desc" {
-			sort.Slice(chirps, func(i int, j int) bool {
-				return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
-			})
-		}
 		w.WriteHeader(200)
 		w.Header().Set("content-type", "application/json")
 		w.Write(resBytes)
 		return
 	}
 
+}
+
+func sortIfDesc(sortBy string, chirps []database.Chirp) {
+	if sortBy == "desc" {
+		sort.Slice(chirps, func(i int, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
 }
 
 func (cfg *config) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
