@@ -35,7 +35,7 @@ func TestRepalceProfane(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := ReplaceProfane(checkMap, test.input)
+			got := replaceProfane(checkMap, test.input)
 			if got != test.expected {
 				t.Errorf("got: %s\nwant: %s\n", got, test.expected)
 			}

@@ -1,20 +1,38 @@
 package main
 
 import (
+	"embed"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/sohWenMing/chirpy/apiconfig"
+	"github.com/sohWenMing/chirpy/databaseconnection"
+	"github.com/sohWenMing/chirpy/gooseutils"
 	"github.com/sohWenMing/chirpy/handlers"
 )
 
+//go:embed sql/schema/*.sql
+var embedMigrations embed.FS
+
 func main() {
+	dbToQueries, err := databaseconnection.Connect(".env")
+	if err != nil {
+		log.Fatal(err)
+	}
+	migrationErr := gooseutils.RunMigrations(dbToQueries.DB, embedMigrations)
+	if err != nil {
+		log.Fatal(migrationErr)
+	}
+	apiConfig := apiconfig.InitApiConfig()
+	apiConfig.SetDatabaseQueries(dbToQueries.Queries)
 	// init the server
 	// start the server, on another go routine
 	// get a channel
-	srv := InitServer(":8080")
+	srv := InitServer(":8080", apiConfig)
 	go StartServer(srv)
 	fmt.Println("server started on port 8080")
 	sigChan := make(chan os.Signal, 1)
@@ -31,10 +49,10 @@ func ListenForSignal(sigChan <-chan os.Signal, server *http.Server) {
 	}
 }
 
-func InitServer(addr string) *http.Server {
+func InitServer(addr string, apiConfig *apiconfig.ApiConfig) *http.Server {
 	srv := &http.Server{}
 	srv.Addr = ":8080"
-	mux := handlers.InitMuxHandler()
+	mux := handlers.InitMuxHandler(apiConfig)
 	srv.Handler = mux
 	return srv
 }

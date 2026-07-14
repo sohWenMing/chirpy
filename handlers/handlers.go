@@ -13,8 +13,7 @@ func InitFileServerHandler(filePath string) http.Handler {
 	return http.FileServer(http.Dir(filePath))
 }
 
-func InitMuxHandler() *http.ServeMux {
-	config := apiconfig.InitApiConfig()
+func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app/",
 		config.MiddlewareMetricsInc(InitFileServerHandler("."))))
@@ -61,7 +60,7 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	responseBody := validStruct{processing.CleanBody(requestBody.Body)}
 	bytes, err := json.Marshal(responseBody)
 	if err != nil {
-		writeJsonErrFunc(w, fmt.Sprintf("something went wrong. Error: ", err.Error()))
+		writeJsonErrFunc(w, fmt.Sprintf("something went wrong. Error: %s", err.Error()))
 		return
 
 	}
