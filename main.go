@@ -24,7 +24,7 @@ func main() {
 		log.Fatal(err)
 	}
 	migrationErr := gooseutils.RunMigrations(dbToQueries.DB, embedMigrations)
-	if err != nil {
+	if migrationErr != nil {
 		log.Fatal(migrationErr)
 	}
 	apiConfig := apiconfig.InitApiConfig()

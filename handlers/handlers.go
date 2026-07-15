@@ -19,25 +19,59 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 		config.MiddlewareMetricsInc(InitFileServerHandler("."))))
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/users", createUserHandler(config))
 	mux.HandleFunc("GET /admin/metrics", hitsHandler(config))
 	mux.HandleFunc("POST /admin/reset", resetHandler(config))
 	return mux
 }
 
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	writeJsonErrFunc := func(w http.ResponseWriter, errMsg string) {
-		type jsonError struct {
-			Error string `json:"error"`
-		}
-		jsonErr := jsonError{
-			errMsg,
-		}
-		w.Header().Add("Content-Type", "application/json")
-		w.WriteHeader(400)
-		bytes, _ := json.Marshal(jsonErr)
-		w.Write(bytes)
-
+func writeJsonErrFunc(w http.ResponseWriter, errMsg string) {
+	type jsonError struct {
+		Error string `json:"error"`
 	}
+	jsonErr := jsonError{
+		errMsg,
+	}
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(400)
+	bytes, _ := json.Marshal(jsonErr)
+	w.Write(bytes)
+}
+func createUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		defer r.Body.Close()
+
+		type EmailStruct struct {
+			Email string `json:"email"`
+		}
+		var emailStruct EmailStruct
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&emailStruct); err != nil {
+			fmt.Println("error occured in decoder: ", err.Error())
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			return
+		}
+		user, err := apiConfig.Queries.CreateUser(ctx, emailStruct.Email)
+		if err != nil {
+			fmt.Println("error occured in creation: ", err.Error())
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			return
+		}
+		resBytes, err := json.Marshal(user)
+		if err != nil {
+			fmt.Println("error occured in marshalling: ", err.Error())
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			return
+		}
+		w.WriteHeader(201)
+		w.Header().Add("Content-Type", "application/json")
+		w.Write(resBytes)
+		return
+	}
+}
+
+func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	type jsonBody struct {
 		Body string `json:"body"`

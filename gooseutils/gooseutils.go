@@ -13,10 +13,10 @@ func RunMigrations(db *sql.DB, fs embed.FS) error {
 	goose.SetDialect("postgres")
 	goose.SetBaseFS(fs)
 
-	if err := goose.Up(db, "schema"); err != nil {
+	if err := goose.Up(db, "sql/schema"); err != nil {
 		return err
 	}
-	if err := goose.Version(db, "schema"); err != nil {
+	if err := goose.Version(db, "sql/schema"); err != nil {
 		return err
 	}
 	fmt.Println("goose migrations successful")
