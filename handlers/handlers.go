@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	mux.HandleFunc("POST /api/users", createUserHandler(config))
+	mux.HandleFunc("GET /api/chirps/{id}", getChirp(config))
 	mux.HandleFunc("GET /api/chirps", getChirps(config))
 	mux.HandleFunc("POST /api/chirps", createChirp(config))
 	mux.HandleFunc("GET /admin/metrics", hitsHandler(config))
@@ -32,7 +34,7 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	return mux
 }
 
-func writeJsonErrFunc(w http.ResponseWriter, errMsg string) {
+func writeJsonErrFunc(w http.ResponseWriter, errMsg string, statusCode int) {
 	type jsonError struct {
 		Error string `json:"error"`
 	}
@@ -40,16 +42,46 @@ func writeJsonErrFunc(w http.ResponseWriter, errMsg string) {
 		errMsg,
 	}
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(400)
+	w.WriteHeader(statusCode)
 	bytes, _ := json.Marshal(jsonErr)
 	w.Write(bytes)
+}
+func getChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		fmt.Println("id: ", id)
+		uuidId, err := uuid.Parse(id)
+		if err != nil {
+			writeJsonErrFunc(w, fmt.Sprintf("Id: %s wa not valid\n", id), 404)
+			return
+		}
+		chirp, err := apiConfig.Queries.GetChirp(r.Context(), uuidId)
+		if err != nil {
+			switch errors.Is(err, sql.ErrNoRows) {
+			case true:
+				writeJsonErrFunc(w, "The id did not return any chirps", 404)
+				return
+			default:
+				writeJsonErrFunc(w, err.Error(), 404)
+				return
+			}
+		}
+		bytes, err := modelprocessing.RepresentChirp(chirp)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 500)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write(bytes)
+		return
+	}
 }
 
 func getChirps(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		chirps, err := apiConfig.Queries.GetChirps(r.Context())
 		if err != nil {
-			writeJsonErrFunc(w, err.Error())
+			writeJsonErrFunc(w, err.Error(), 400)
 			return
 		}
 		reprChirps := make([]modelprocessing.ReprChirp, len(chirps))
@@ -59,7 +91,7 @@ func getChirps(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *ht
 
 		bytes, err := json.Marshal(reprChirps)
 		if err != nil {
-			writeJsonErrFunc(w, err.Error())
+			writeJsonErrFunc(w, err.Error(), 400)
 			return
 		}
 		w.Header().Add("Content-Type", "application/json")
@@ -79,16 +111,16 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 		defer r.Body.Close()
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&chirp); err != nil {
-			writeJsonErrFunc(w, "error parsing input")
+			writeJsonErrFunc(w, "error parsing input", 500)
 			return
 		}
 		if err := validateChirp(chirp.Body); err != nil {
-			writeJsonErrFunc(w, err.Error())
+			writeJsonErrFunc(w, err.Error(), 400)
 			return
 		}
 		uuid, err := uuid.Parse(chirp.UserId)
 		if err != nil {
-			writeJsonErrFunc(w, "user_id was not valid ")
+			writeJsonErrFunc(w, "user_id was not valid ", 400)
 			return
 		}
 		params := database.CreateChirpParams{
@@ -97,13 +129,13 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 		}
 		returnedChirp, err := apiConfig.Queries.CreateChirp(r.Context(), params)
 		if err != nil {
-			writeJsonErrFunc(w, "user_id was not valid ")
+			writeJsonErrFunc(w, "user_id was not valid ", 400)
 			return
 		}
 
 		reprChirp, err := modelprocessing.RepresentChirp(returnedChirp)
 		if err != nil {
-			writeJsonErrFunc(w, err.Error())
+			writeJsonErrFunc(w, err.Error(), 500)
 			return
 
 		}
@@ -129,12 +161,12 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	var requestBody jsonBody
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&requestBody); err != nil {
-		writeJsonErrFunc(w, fmt.Sprintf("Something went wrong. error: %s", err.Error()))
+		writeJsonErrFunc(w, fmt.Sprintf("Something went wrong. error: %s", err.Error()), 500)
 		return
 	}
 	fmt.Println("requestBody: ", requestBody)
 	if len(requestBody.Body) > 140 {
-		writeJsonErrFunc(w, fmt.Sprintf("chirp is too long"))
+		writeJsonErrFunc(w, fmt.Sprintf("chirp is too long"), 401)
 		return
 	}
 
@@ -144,7 +176,7 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	responseBody := validStruct{processing.CleanBody(requestBody.Body)}
 	bytes, err := json.Marshal(responseBody)
 	if err != nil {
-		writeJsonErrFunc(w, fmt.Sprintf("something went wrong. Error: %s", err.Error()))
+		writeJsonErrFunc(w, fmt.Sprintf("something went wrong. Error: %s", err.Error()), 500)
 		return
 
 	}
@@ -165,19 +197,19 @@ func createUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWrite
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&emailStruct); err != nil {
 			fmt.Println("error occured in decoder: ", err.Error())
-			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()), 500)
 			return
 		}
 		user, err := apiConfig.Queries.CreateUser(ctx, emailStruct.Email)
 		if err != nil {
 			fmt.Println("error occured in creation: ", err.Error())
-			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()), 500)
 			return
 		}
 		resBytes, err := modelprocessing.RepresentUser(user)
 		if err != nil {
 			fmt.Println("error occured in marshalling: ", err.Error())
-			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()))
+			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()), 500)
 			return
 		}
 		w.Header().Add("Content-Type", "application/json")
