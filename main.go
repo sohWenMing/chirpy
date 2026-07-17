@@ -11,15 +11,21 @@ import (
 
 	"github.com/sohWenMing/chirpy/apiconfig"
 	"github.com/sohWenMing/chirpy/databaseconnection"
+	"github.com/sohWenMing/chirpy/envloader"
 	"github.com/sohWenMing/chirpy/gooseutils"
 	"github.com/sohWenMing/chirpy/handlers"
 )
 
 //go:embed sql/schema/*.sql
 var embedMigrations embed.FS
+var envPath = "./.env"
 
 func main() {
-	dbToQueries, err := databaseconnection.Connect(".env")
+	envConfig, err := envloader.LoadEnv(envPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbToQueries, err := databaseconnection.Connect(envConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -29,6 +35,7 @@ func main() {
 	}
 	apiConfig := apiconfig.InitApiConfig()
 	apiConfig.SetDatabaseQueries(dbToQueries.Queries)
+	apiConfig.SetPlatform(envConfig.GetPlatform())
 	// init the server
 	// start the server, on another go routine
 	// get a channel

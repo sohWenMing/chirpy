@@ -10,6 +10,7 @@ import (
 type ApiConfig struct {
 	fileServerHits atomic.Int32
 	Queries        *database.Queries
+	Platform       string
 }
 
 func InitApiConfig() *ApiConfig {
@@ -20,6 +21,13 @@ func InitApiConfig() *ApiConfig {
 func (a *ApiConfig) SetDatabaseQueries(queries *database.Queries) {
 	a.Queries = queries
 	return
+}
+func (a *ApiConfig) SetPlatform(platform string) {
+	a.Platform = platform
+	return
+}
+func (a *ApiConfig) GetPlatform() string {
+	return a.Platform
 }
 
 func (a *ApiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {

@@ -13,11 +13,7 @@ type DBToQueries struct {
 	Queries *database.Queries
 }
 
-func Connect(envPath string) (dbToQueries *DBToQueries, err error) {
-	envConfig, err := envloader.LoadEnv(envPath)
-	if err != nil {
-		return nil, err
-	}
+func Connect(envConfig *envloader.EnvConfig) (dbToQueries *DBToQueries, err error) {
 	db, err := sql.Open("postgres", envConfig.GetDBString())
 	if err != nil {
 		return nil, err
