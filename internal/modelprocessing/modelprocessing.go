@@ -15,6 +15,17 @@ type reprUser struct {
 	Email     string        `json:"email"`
 }
 
+func RepresentUserRetrievedByEmail(u database.User) (returned []byte, err error) {
+	reprUser := reprUser{
+		uuid.NullUUID{UUID: u.ID, Valid: true}, u.CreatedAt, u.UpdatedAt, u.Email,
+	}
+	bytes, err := json.Marshal(reprUser)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
 // gets a byte slice of the json representation of the user.
 // All data members will be lowercased
 func RepresentUser(u database.User) (returned []byte, err error) {

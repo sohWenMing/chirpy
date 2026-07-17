@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sohWenMing/chirpy/apiconfig"
+	internalauth "github.com/sohWenMing/chirpy/internal/auth"
 	"github.com/sohWenMing/chirpy/internal/database"
 	"github.com/sohWenMing/chirpy/internal/modelprocessing"
 	"github.com/sohWenMing/chirpy/processing"
@@ -28,6 +29,7 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	mux.HandleFunc("GET /api/chirps/{id}", getChirp(config))
 	mux.HandleFunc("GET /api/chirps", getChirps(config))
 	mux.HandleFunc("POST /api/chirps", createChirp(config))
+	mux.HandleFunc("POST /api/login", loginUserHandler(config))
 	mux.HandleFunc("GET /admin/metrics", hitsHandler(config))
 	resetHandlerFunc := http.HandlerFunc(resetHandler(config))
 	mux.HandleFunc("POST /admin/reset", checkPlatformMiddleWare(config, resetHandlerFunc))
@@ -185,22 +187,88 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 	return
 }
+
+type UserDetails struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func getUserDetailsFromRequest(r *http.Request) (details UserDetails, err error) {
+	fmt.Println("from within getUserDetailsFromRequest")
+	// bodyBytes, _ := io.ReadAll(r.Body)
+	// fmt.Println("bodyBytes: ", string(bodyBytes))
+	var userDetails UserDetails
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&userDetails); err != nil {
+		fmt.Println("error: %v\n", err)
+		return UserDetails{}, err
+	}
+	return userDetails, nil
+}
+
+func loginUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		userDetails, err := getUserDetailsFromRequest(r)
+		if err != nil {
+			writeJsonErrFunc(w, "user details were not valid", 400)
+			return
+		}
+		userFromDB, err := apiConfig.Queries.GetUserByEmail(r.Context(), userDetails.Email)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJsonErrFunc(w, "user could not be found with this email", 401)
+				return
+			} else {
+				writeJsonErrFunc(w, err.Error(), 500)
+				return
+			}
+		}
+		isValid, err := internalauth.CompareHashAndPassword(userDetails.Password, userFromDB.HashedPassword)
+		if err != nil {
+			writeJsonErrFunc(w, "an internal error occured", 500)
+			return
+		}
+		if !isValid {
+			writeJsonErrFunc(w, "the login details are not correct", 401)
+		}
+		reprUser, err := modelprocessing.RepresentUserRetrievedByEmail(userFromDB)
+		if err != nil {
+			writeJsonErrFunc(w, "error processing returned user", 500)
+			return
+		}
+		w.WriteHeader(200)
+		w.Header().Add("Content-Type", "application/json")
+		w.Write(reprUser)
+		return
+	}
+}
 func createUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		defer r.Body.Close()
-
-		type EmailStruct struct {
-			Email string `json:"email"`
-		}
-		var emailStruct EmailStruct
-		decoder := json.NewDecoder(r.Body)
-		if err := decoder.Decode(&emailStruct); err != nil {
-			fmt.Println("error occured in decoder: ", err.Error())
-			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()), 500)
+		fmt.Println("within create user handler")
+		userDetails, err := getUserDetailsFromRequest(r)
+		fmt.Println("userDetails: ", userDetails)
+		if err != nil {
+			writeJsonErrFunc(w, "user details were not valid", 400)
 			return
 		}
-		user, err := apiConfig.Queries.CreateUser(ctx, emailStruct.Email)
+		if len(userDetails.Password) == 0 {
+			writeJsonErrFunc(w, "user cannot be created without password", 400)
+		}
+		hashedPassword, err := internalauth.HashPassword(userDetails.Password)
+		if err != nil {
+			writeJsonErrFunc(w, "error processing password", 500)
+			return
+		}
+
+		params := database.CreateUserParams{
+			Email:          userDetails.Email,
+			HashedPassword: hashedPassword,
+		}
+
+		user, err := apiConfig.Queries.CreateUser(ctx, params)
 		if err != nil {
 			fmt.Println("error occured in creation: ", err.Error())
 			writeJsonErrFunc(w, fmt.Sprintf("an error occured: %s\n", err.Error()), 500)

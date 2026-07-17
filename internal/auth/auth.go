@@ -9,7 +9,7 @@ func HashPassword(password string) (string, error) {
 	}
 	return hash, nil
 }
-func CompareHashANdPassword(password, hash string) (bool, error) {
+func CompareHashAndPassword(password, hash string) (bool, error) {
 	isMatch, err := argon2id.ComparePasswordAndHash(password, hash)
 	if err != nil {
 		return false, err

@@ -37,7 +37,7 @@ func TestPasswordHashing(t *testing.T) {
 				// we need a valid hash still, so to test we change the password
 				test.password = "change_password"
 			}
-			isMatch, err := CompareHashANdPassword(test.password, test.checkedHash)
+			isMatch, err := CompareHashAndPassword(test.password, test.checkedHash)
 			if err != nil {
 				t.Errorf("didn't expect error in check hash. Got %v\n", err)
 				return
