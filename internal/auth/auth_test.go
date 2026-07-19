@@ -1,6 +1,11 @@
 package auth
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 func TestPasswordHashing(t *testing.T) {
 	type test struct {
@@ -56,5 +61,57 @@ func TestPasswordHashing(t *testing.T) {
 			}
 		})
 	}
+}
 
+func TestJWTFunctionality(t *testing.T) {
+	type test struct {
+		name       string
+		secret     string
+		isTestPass bool
+	}
+	tests := []test{
+		{
+			"basic should pass",
+			"thisIsASecret",
+			true,
+		},
+		{
+			"basic should pass",
+			"thisIsASecret",
+			false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			uuid, _ := uuid.NewRandom()
+
+			jwt, err := MakeJWT(uuid, test.secret, 5*time.Minute)
+			if err != nil {
+				t.Errorf("didn't expect error, got %v\n", err)
+				return
+			}
+			if test.isTestPass {
+				returnedUUID, err := ValidateJWT(jwt, test.secret)
+				if err != nil {
+					t.Errorf("didn't expect error, got %v\n", err)
+					return
+				}
+				got := returnedUUID.String()
+				want := uuid.String()
+
+				if got != want {
+					t.Errorf("got %s\nwant %s\n", got, want)
+					return
+				}
+			} else {
+				wrongSecret := test.secret + "some_stuff"
+				_, err := ValidateJWT(jwt, wrongSecret)
+				if err == nil {
+					t.Errorf("expected error, didn't get one ")
+					return
+				}
+			}
+		})
+	}
 }

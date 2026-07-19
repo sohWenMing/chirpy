@@ -15,6 +15,25 @@ type reprUser struct {
 	Email     string        `json:"email"`
 }
 
+type reprUserWithToken struct {
+	Id        uuid.NullUUID `json:"id"`
+	CreatedAt sql.NullTime  `json:"created_at"`
+	UpdatedAt sql.NullTime  `json:"updated_at"`
+	Email     string        `json:"email"`
+	Token     string        `json:"token"`
+}
+
+func RepresentUserandToken(u database.User, token string) (returned []byte, err error) {
+	reprUserWithToken := reprUserWithToken{
+		uuid.NullUUID{UUID: u.ID, Valid: true}, u.CreatedAt, u.UpdatedAt, u.Email, token,
+	}
+	bytes, err := json.Marshal(reprUserWithToken)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
 func RepresentUserRetrievedByEmail(u database.User) (returned []byte, err error) {
 	reprUser := reprUser{
 		uuid.NullUUID{UUID: u.ID, Valid: true}, u.CreatedAt, u.UpdatedAt, u.Email,

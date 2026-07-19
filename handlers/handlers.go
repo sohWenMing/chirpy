@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sohWenMing/chirpy/apiconfig"
+	"github.com/sohWenMing/chirpy/internal/auth"
 	internalauth "github.com/sohWenMing/chirpy/internal/auth"
 	"github.com/sohWenMing/chirpy/internal/database"
 	"github.com/sohWenMing/chirpy/internal/modelprocessing"
@@ -105,6 +107,18 @@ func getChirps(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *ht
 
 func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		bearerToken, err := internalauth.GetBearerToken(r.Header)
+		if err != nil {
+			fmt.Println("error occured when trying to get bearerToken", bearerToken)
+			writeJsonErrFunc(w, "bearer token not found", 401)
+			return
+		}
+		userId, err := internalauth.ValidateJWT(bearerToken, apiConfig.SecretKey)
+		if err != nil {
+			fmt.Println("error occured when validatingJWT", bearerToken)
+			writeJsonErrFunc(w, err.Error(), 400)
+			return
+		}
 		type chirpStruct struct {
 			Body   string `json:"body"`
 			UserId string `json:"user_id"`
@@ -116,6 +130,7 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 			writeJsonErrFunc(w, "error parsing input", 500)
 			return
 		}
+		chirp.UserId = userId.String()
 		if err := validateChirp(chirp.Body); err != nil {
 			writeJsonErrFunc(w, err.Error(), 400)
 			return
@@ -134,12 +149,10 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 			writeJsonErrFunc(w, "user_id was not valid ", 400)
 			return
 		}
-
 		reprChirp, err := modelprocessing.RepresentChirp(returnedChirp)
 		if err != nil {
 			writeJsonErrFunc(w, err.Error(), 500)
 			return
-
 		}
 		w.WriteHeader(201)
 		w.Write([]byte(reprChirp))
@@ -189,8 +202,9 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type UserDetails struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	ExpiresIn int    `json:"expires_in"`
 }
 
 func getUserDetailsFromRequest(r *http.Request) (details UserDetails, err error) {
@@ -231,8 +245,16 @@ func loginUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter
 		}
 		if !isValid {
 			writeJsonErrFunc(w, "the login details are not correct", 401)
+			return
 		}
-		reprUser, err := modelprocessing.RepresentUserRetrievedByEmail(userFromDB)
+
+		token, err := auth.MakeJWT(userFromDB.ID, apiConfig.SecretKey, getDurationFromUserDetails(userDetails))
+		if err != nil {
+			writeJsonErrFunc(w, "internal error", 500)
+			return
+		}
+
+		reprUser, err := modelprocessing.RepresentUserandToken(userFromDB, token)
 		if err != nil {
 			writeJsonErrFunc(w, "error processing returned user", 500)
 			return
@@ -242,6 +264,13 @@ func loginUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter
 		w.Write(reprUser)
 		return
 	}
+}
+
+func getDurationFromUserDetails(u UserDetails) time.Duration {
+	if u.ExpiresIn == 0 {
+		return 60 * time.Minute
+	}
+	return time.Duration(u.ExpiresIn) * time.Minute
 }
 func createUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {

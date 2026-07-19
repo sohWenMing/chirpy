@@ -36,6 +36,7 @@ func main() {
 	apiConfig := apiconfig.InitApiConfig()
 	apiConfig.SetDatabaseQueries(dbToQueries.Queries)
 	apiConfig.SetPlatform(envConfig.GetPlatform())
+	apiConfig.SetSecretKey(envConfig.GetSecretKey())
 	// init the server
 	// start the server, on another go routine
 	// get a channel

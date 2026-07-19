@@ -11,6 +11,7 @@ type ApiConfig struct {
 	fileServerHits atomic.Int32
 	Queries        *database.Queries
 	Platform       string
+	SecretKey      string
 }
 
 func InitApiConfig() *ApiConfig {
@@ -28,6 +29,14 @@ func (a *ApiConfig) SetPlatform(platform string) {
 }
 func (a *ApiConfig) GetPlatform() string {
 	return a.Platform
+}
+
+func (a *ApiConfig) SetSecretKey(secretKey string) {
+	a.SecretKey = secretKey
+	return
+}
+func (a *ApiConfig) GetSecretKey() string {
+	return a.SecretKey
 }
 
 func (a *ApiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
