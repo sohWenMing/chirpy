@@ -7,6 +7,14 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestCreateRefreshToken(t *testing.T) {
+	refreshToken := MakeRefreshToken()
+	if len(refreshToken) == 0 {
+		t.Errorf("refresh token should not be empty")
+		return
+	}
+}
+
 func TestPasswordHashing(t *testing.T) {
 	type test struct {
 		name            string

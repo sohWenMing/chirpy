@@ -28,6 +28,8 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	mux.HandleFunc("POST /api/users", createUserHandler(config))
+	mux.HandleFunc("POST /api/refresh", refreshHandler(config))
+	mux.HandleFunc("POST /api/revoke", revokeHandler(config))
 	mux.HandleFunc("GET /api/chirps/{id}", getChirp(config))
 	mux.HandleFunc("GET /api/chirps", getChirps(config))
 	mux.HandleFunc("POST /api/chirps", createChirp(config))
@@ -116,7 +118,7 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 		userId, err := internalauth.ValidateJWT(bearerToken, apiConfig.SecretKey)
 		if err != nil {
 			fmt.Println("error occured when validatingJWT", bearerToken)
-			writeJsonErrFunc(w, err.Error(), 400)
+			writeJsonErrFunc(w, err.Error(), 401)
 			return
 		}
 		type chirpStruct struct {
@@ -132,12 +134,12 @@ func createChirp(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *
 		}
 		chirp.UserId = userId.String()
 		if err := validateChirp(chirp.Body); err != nil {
-			writeJsonErrFunc(w, err.Error(), 400)
+			writeJsonErrFunc(w, err.Error(), 401)
 			return
 		}
 		uuid, err := uuid.Parse(chirp.UserId)
 		if err != nil {
-			writeJsonErrFunc(w, "user_id was not valid ", 400)
+			writeJsonErrFunc(w, "user_id was not valid ", 401)
 			return
 		}
 		params := database.CreateChirpParams{
@@ -202,9 +204,9 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type UserDetails struct {
-	Email     string `json:"email"`
-	Password  string `json:"password"`
-	ExpiresIn int    `json:"expires_in"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	// ExpiresIn int    `json:"expires_in"`
 }
 
 func getUserDetailsFromRequest(r *http.Request) (details UserDetails, err error) {
@@ -248,13 +250,26 @@ func loginUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter
 			return
 		}
 
-		token, err := auth.MakeJWT(userFromDB.ID, apiConfig.SecretKey, getDurationFromUserDetails(userDetails))
+		jwtToken, err := auth.MakeJWT(userFromDB.ID, apiConfig.SecretKey, 60*time.Minute)
+		if err != nil {
+			writeJsonErrFunc(w, "internal error", 500)
+			return
+		}
+		createdToken := auth.MakeRefreshToken()
+		fmt.Println("created token: ", createdToken)
+
+		params := database.CreateRefreshTokenParams{
+			Token:  createdToken,
+			UserID: userFromDB.ID,
+		}
+
+		refreshToken, err := apiConfig.Queries.CreateRefreshToken(r.Context(), params)
 		if err != nil {
 			writeJsonErrFunc(w, "internal error", 500)
 			return
 		}
 
-		reprUser, err := modelprocessing.RepresentUserandToken(userFromDB, token)
+		reprUser, err := modelprocessing.RepresentUserandToken(userFromDB, jwtToken, refreshToken.Token)
 		if err != nil {
 			writeJsonErrFunc(w, "error processing returned user", 500)
 			return
@@ -266,12 +281,6 @@ func loginUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter
 	}
 }
 
-func getDurationFromUserDetails(u UserDetails) time.Duration {
-	if u.ExpiresIn == 0 {
-		return 60 * time.Minute
-	}
-	return time.Duration(u.ExpiresIn) * time.Minute
-}
 func createUserHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -349,6 +358,60 @@ func resetHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r 
 		}
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
+	}
+}
+
+func refreshHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		bearerToken, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		row, err := apiConfig.Queries.GetValidRefreshToken(r.Context(), bearerToken)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		jwt, err := auth.MakeJWT(row.UserID, apiConfig.SecretKey, 60*time.Minute)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 500)
+			return
+		}
+		type tokenResponse struct {
+			Token string `json:"token"`
+		}
+		response := tokenResponse{jwt}
+		bytes, err := json.Marshal(response)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 500)
+			return
+		}
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(bytes)
+		return
+	}
+
+}
+func revokeHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		bearerToken, err := auth.GetBearerToken(r.Header)
+		fmt.Println("bearerToken: ", bearerToken)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		if err := apiConfig.Queries.RevokeRefreshToken(r.Context(), bearerToken); err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		w.WriteHeader(204)
+		return
 	}
 }
 
