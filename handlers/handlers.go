@@ -22,12 +22,16 @@ func InitFileServerHandler(filePath string) http.Handler {
 }
 
 func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
+
+	resetHandlerFunc := http.HandlerFunc(resetHandler(config))
 	mux := http.NewServeMux()
+
 	mux.Handle("/app/", http.StripPrefix("/app/",
 		config.MiddlewareMetricsInc(InitFileServerHandler("."))))
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	mux.HandleFunc("POST /api/users", createUserHandler(config))
+	mux.HandleFunc("PUT /api/users", updateUserHandler(config))
 	mux.HandleFunc("POST /api/refresh", refreshHandler(config))
 	mux.HandleFunc("POST /api/revoke", revokeHandler(config))
 	mux.HandleFunc("GET /api/chirps/{id}", getChirp(config))
@@ -35,8 +39,8 @@ func InitMuxHandler(config *apiconfig.ApiConfig) *http.ServeMux {
 	mux.HandleFunc("POST /api/chirps", createChirp(config))
 	mux.HandleFunc("POST /api/login", loginUserHandler(config))
 	mux.HandleFunc("GET /admin/metrics", hitsHandler(config))
-	resetHandlerFunc := http.HandlerFunc(resetHandler(config))
 	mux.HandleFunc("POST /admin/reset", checkPlatformMiddleWare(config, resetHandlerFunc))
+	mux.HandleFunc("DELETE /api/chirps/{id}", deleteHandler(config))
 	return mux
 }
 
@@ -408,6 +412,100 @@ func revokeHandler(apiConfig *apiconfig.ApiConfig) func(w http.ResponseWriter, r
 		}
 		if err := apiConfig.Queries.RevokeRefreshToken(r.Context(), bearerToken); err != nil {
 			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		w.WriteHeader(204)
+		return
+	}
+}
+
+func updateUserHandler(config *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bearerToken, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		userId, err := auth.ValidateJWT(bearerToken, config.SecretKey)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		userDetails, err := getUserDetailsFromRequest(r)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		hashedPassword, err := auth.HashPassword(userDetails.Password)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		params := database.UpdateUserParams{
+			Email:          userDetails.Email,
+			HashedPassword: hashedPassword,
+			ID:             userId,
+		}
+
+		returnedUser, err := config.Queries.UpdateUser(r.Context(), params)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		bytes, err := modelprocessing.RepresentUserRetrievedByEmail(returnedUser)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(bytes)
+		return
+	}
+}
+
+func deleteHandler(config *apiconfig.ApiConfig) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bearerToken, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+		userId, err := auth.ValidateJWT(bearerToken, config.SecretKey)
+		if err != nil {
+			writeJsonErrFunc(w, err.Error(), 401)
+			return
+		}
+
+		chirpId := r.PathValue("id")
+		if chirpId == "" {
+			if err != nil {
+				writeJsonErrFunc(w, "chirp not found", 404)
+				return
+			}
+		}
+		parsedChirpId, err := uuid.Parse(chirpId)
+		if err != nil {
+			writeJsonErrFunc(w, "chirp not found", 404)
+			return
+		}
+
+		retrievedChirp, err := config.Queries.GetChirp(r.Context(), parsedChirpId)
+		if err != nil {
+			writeJsonErrFunc(w, "chirp not found", 404)
+			return
+		}
+
+		if retrievedChirp.UserID != userId {
+			writeJsonErrFunc(w, "user not authorized", 403)
+			return
+		}
+
+		if err := config.Queries.DeleteChirp(r.Context(), retrievedChirp.ID); err != nil {
+			writeJsonErrFunc(w, "Internal error", 500)
 			return
 		}
 		w.WriteHeader(204)
